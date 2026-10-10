@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Engine ref
+        id: engine
+        run: echo "ref=$(sed -n 's/^ref=//p' engine.properties)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recached-sh/recached
+          ref: ${{ steps.engine.outputs.ref }}
+          path: engine-src
+
+      - name: Rust toolchain
+        working-directory: engine-src
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine-src
+
+      # Swift ships preinstalled on the Ubuntu runner image.
+      - name: Swift version
+        run: swift --version
+
+      # Style is .swift-format; `swift format format -i --recursive Sources/Recached
+      # Tests Package.swift` fixes most findings. RecachedCore is generated.
+      - name: Format and lint
+        run: swift format lint --strict --recursive Sources/Recached Tests Package.swift
+
+      - name: Stage engine
+        run: scripts/build-engine.sh engine-src
+
+      # SwiftPM users compile the committed bindings, so they must be exactly
+      # what the core this package pins generates.
+      - name: Committed bindings match the core
+        run: git diff --exit-code -- Sources/RecachedCore
+
+      # Includes the live tests, which start the staged recached-server
+      # themselves on free loopback ports.
+      - name: Tests
+        run: scripts/test-linux.sh -Xswiftc -warnings-as-errors
+
+      # Release dry run: an app that depends on this package the way the
+      # README says builds, links and runs.
+      - name: Consumer package
+        run: scripts/check-package.sh
+
+  apple:
+    name: Tests (macOS and iOS simulator)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Engine ref
+        id: engine
+        run: echo "ref=$(sed -n 's/^ref=//p' engine.properties)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: recached-sh/recached
+          ref: ${{ steps.engine.outputs.ref }}
+          path: engine-src
+
+      - name: Rust toolchain
+        working-directory: engine-src
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine-src
+
+      # The host library and server are always built (the live tests use the
+      # server). The XCFramework only while Package.swift pins no release;
+      # once it does, SwiftPM downloads that release's and the tests run
+      # against exactly what users get.
+      - name: Stage engine
+        run: |
+          if grep -q '^let engineURL = ""' Package.swift; then
+            scripts/build-engine.sh engine-src
+          else
+            HOST_ONLY=1 scripts/build-engine.sh engine-src
+          fi
+
+      - name: Committed bindings match the core
+        run: git diff --exit-code -- Sources/RecachedCore
+
+      - name: swift test (macOS)
+        run: swift test
+
+      - name: Consumer package (macOS)
+        run: scripts/check-package.sh
+
+      # The live tests skip themselves here: iOS cannot start the server.
+      - name: Tests on an iOS simulator
+        run: |
+          set -euo pipefail
+          SCHEME="$(xcodebuild -list -json | python3 -c 'import json,sys; s=json.load(sys.stdin)["workspace"]["schemes"]; print(next((x for x in s if x.endswith("-Package")), s[0]))')"
+          DEVICE="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')"
+          xcodebuild test -scheme "$SCHEME" -destination "id=$DEVICE"

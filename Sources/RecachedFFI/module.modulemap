@@ -1,0 +1,8 @@
+// Linux only: the core's C interface as a system library. The header and
+// librecached_mobile.so are staged in engine/ by scripts/build-engine.sh.
+// Apple platforms get the same module from RecachedFFI.xcframework.
+module RecachedFFI [system] {
+    header "../../engine/include/RecachedFFI.h"
+    link "recached_mobile"
+    export *
+}

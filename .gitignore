@@ -1,0 +1,10 @@
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+Package.resolved
+
+# Staged engine — produced by scripts/build-engine.sh, never committed.
+# (Sources/RecachedCore/RecachedCore.swift is committed: SwiftPM users build it.)
+/engine/
