@@ -114,6 +114,10 @@ scripts/test-linux.sh                   # all tests, including live tests agains
 scripts/check-package.sh                # an app depending on this package builds and runs
 ```
 
+On Linux, `URLSessionWebSocketTask` needs a libcurl built with WebSocket
+support, which Ubuntu 24.04's (8.5) is not. The live tests then skip with that
+reason; they always run on macOS CI.
+
 On macOS, `scripts/build-engine.sh` also builds `engine/RecachedFFI.xcframework`,
 and `swift test` runs everything. The live tests start the staged
 `recached-server` themselves, on free loopback ports. They skip on the iOS

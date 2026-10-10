@@ -57,12 +57,16 @@ final class ObserveTests: XCTestCase {
         await eventually { text.values == [nil] && bytes.values == [Data([0xff])] }
     }
 
-    func testStateStreamsStartWithTheCurrentValue() async throws {
+    func testStateStreamsStartWithTheCurrentValueThenFollowChanges() async throws {
         let cache = try db.open()
         let states = Recorder(cache.connectionStates())
         let pending = Recorder(cache.pendingWriteCounts())
+        await eventually("the current values") { states.values == [.offline] && pending.values == [0] }
+
         try cache.set("a", "1")
-        await eventually { states.values == [.offline] && pending.values == [0, 1] }
+        // Only the last value is guaranteed: a consumer that has not caught up
+        // skips to the newest one by design.
+        await eventually("the change") { pending.values.last == 1 }
     }
 
     // The models are main-actor types, checked in main-actor helpers: a test

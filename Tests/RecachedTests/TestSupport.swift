@@ -3,6 +3,9 @@ import XCTest
 
 @testable import Recached
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
 #if canImport(Glibc)
     import Glibc
 #elseif canImport(Darwin)
@@ -138,6 +141,27 @@ final class Recorder<Element: Sendable>: @unchecked Sendable {
         init() throws { throw XCTSkip("live tests need a recached-server subprocess (macOS and Linux only)") }
         func start() async throws {}
         func stop() {}
+    }
+#endif
+
+#if os(Linux)
+    /// Why this platform cannot run the live tests, or `nil` when it can.
+    ///
+    /// On Linux, `URLSessionWebSocketTask` goes through the system libcurl, and
+    /// Ubuntu 24.04's (8.5) is built without WebSocket support: every socket
+    /// fails with "WebSockets not supported by libcurl". Newer distributions'
+    /// libcurl has it. The live tests run on macOS regardless.
+    func webSocketsUnsupported(_ url: URL) async -> String? {
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let socket = session.webSocketTask(with: url)
+        socket.resume()
+        let failure: String? = await withCheckedContinuation { continuation in
+            socket.send(.string(resp("PING"))) { error in continuation.resume(returning: error.map { "\($0)" }) }
+        }
+        socket.cancel(with: .normalClosure, reason: nil)
+        guard let failure, failure.contains("WebSockets not supported") else { return nil }
+        return "this platform's libcurl was built without WebSocket support"
     }
 #endif
 

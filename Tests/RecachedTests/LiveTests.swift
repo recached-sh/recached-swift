@@ -14,6 +14,9 @@ final class LiveTests: XCTestCase {
     override func setUp() async throws {
         server = try LiveServer()
         try await server.start()
+        #if os(Linux)
+            if let reason = await webSocketsUnsupported(server.url) { throw XCTSkip(reason) }
+        #endif
     }
 
     override func tearDown() {
