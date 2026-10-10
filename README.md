@@ -4,43 +4,55 @@ A local-first [Recached](https://github.com/recached-sh/recached) client for
 iOS and macOS.
 
 - **Local reads:** `get` reads device memory. It never waits on the network,
-  and after a restart with no connection it returns the last-synced data.
+  and after a restart with no connection it returns saved data that has not expired.
 - **Durable queued writes:** a write is saved with its place in the outbox
-  before `set` returns. It reaches the server exactly once, even if the app is
-  killed before the server replied.
+  before a successful `set` returns. Pending writes survive an app kill and replay with their original duplicate-suppression identities; see the limits below.
 - **Reconnect recovery:** after a drop the client reconnects with backoff, or
-  immediately when the network or the app comes back. It replays queued
+  immediately when the network becomes available or an iOS app returns to the foreground. It replays queued
   writes and catches up on what changed meanwhile, deletions included.
-- **Reactive updates:** `observe(key)` is an `AsyncStream` that yields when
-  that key changes, whether on this device, on another, or on the server. A
+- **Reactive updates:** `observe(key)` is an `AsyncStream` of the current local value and later changes, including server updates. Equal values are suppressed and slow consumers can skip intermediate values. A
   write to one key wakes only that key's observers. SwiftUI models are
   included.
 
 Built on `recached-mobile`, the Rust core it shares with the Android SDK,
 through [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
-> **Status: 0.1.0, unreleased.** Builds against an unreleased branch of
-> recached until that core ships in a release. Until then, Apple platforms
-> need the XCFramework built locally (see Development).
+> **Status: 0.1.0, unreleased preview.** The API and native core are implemented. `Package.swift` has no released XCFramework URL or checksum, so Apple builds currently require the local core build below. CI's core ref is recorded in `engine.properties`.
 
-## Install
+## Build and install the preview
+
+On a Mac with Xcode and Rust, build from a recached checkout containing `recached-mobile`:
+
+```sh
+git clone --branch dev https://github.com/recached-sh/recached.git
+git clone https://github.com/recached-sh/recached-swift.git
+cd recached-swift
+scripts/build-engine.sh ../recached
+```
+
+Add this directory as a local package in Xcode, or use a path dependency from a SwiftPM app beside the checkout:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/recached-sh/recached-swift", from: "0.1.0")
+    .package(path: "../recached-swift")
 ],
 targets: [
-    .target(name: "App", dependencies: [.product(name: "Recached", package: "recached-swift")])
+    .target(name: "App", dependencies: [
+        .product(name: "Recached", package: "recached-swift")
+    ])
 ]
 ```
 
-iOS 15+ and macOS 12+.
+A versioned remote dependency is not the install path until the package pins a released XCFramework. Supports iOS 15+ and macOS 12+. Linux is a contributor test path using the staged system library.
 
 ## Use
 
 Open one instance and keep it for the life of the app:
 
 ```swift
+import Foundation
+import Recached
+
 let cache = try Recached.open(
     named: "app",
     config: RecachedConfig(url: URL(string: "wss://cache.example.com")!, syncToken: token)
@@ -52,24 +64,32 @@ Choose what to keep in sync, then read, write and observe:
 ```swift
 cache.watch("todo:*")                         // server state for these keys, kept live
 
-try cache.set("todo:42", #"{"title":"Buy milk"}"#)
-let todo = try cache.getString("todo:42")     // local: safe on the main actor
+try cache.set("todo:42:title", "Buy milk")
+let todo = try cache.getString("todo:42:title")     // local: safe on the main actor
 
 for await todos in cache.observeMatching("todo:*") {
     render(todos)                             // now, then after every change
 }
 ```
 
-In SwiftUI, `ObservedKey` (iOS 17+, Observation) or `ObservableKey`
+In SwiftUI, `ObservedKey` (iOS 17+ / macOS 14+, Observation) or `ObservableKey`
 (iOS 15+, `ObservableObject`) follows one key:
 
 ```swift
+import SwiftUI
+
+@available(iOS 17, macOS 14, *)
+@MainActor
 struct TitleView: View {
     @State private var title: ObservedKey
     init(cache: Recached) { _title = State(initialValue: ObservedKey(cache, "todo:42:title")) }
     var body: some View { Text(title.string ?? "") }
 }
 ```
+
+`watch` requests a server snapshot asynchronously. Until it arrives, reads can return a miss or saved data. Watches are not persisted; register them after every open. Observers and SwiftUI models listen to local changes and do not create server subscriptions.
+
+The examples assume your app supplies a backend-minted `token` and a `render` function. A watch is not an authorization boundary: configure [sync scopes](https://recached.dev/server/sync-scopes) for per-user state.
 
 Show sync state:
 
@@ -96,13 +116,26 @@ keeps the write queued; it is retried on every reconnect until it goes through.
 Other calls: `incr(_:by:)` (a counter that merges with other clients'
 increments instead of overwriting them), `setJSON` / `mergeJSON` /
 `getJSON`, `set(_:_:ttl:)`, `delete`, `getMatching`, `setSyncToken`,
-`reconnectNow`. `close()` stops syncing; queued writes stay on disk for the
-next open.
+`reconnectNow`. `close()` stops syncing; local reads and writes remain usable, and queued writes stay on disk for the next open.
 
 `open(named:)` keeps the database in Application Support and **excludes it
 from backups**. Restoring it onto another device would give the two one client
 identity, and the server would drop one device's writes as duplicates of the
 other's. If you choose a location with `open(at:)`, exclude it yourself.
+
+## Delivery and storage limits
+
+A connected state means the WebSocket is open, not that authentication, watch hydration, or pending writes have completed. Local write results describe the local operation; the server can later refuse it.
+
+- The outbox defaults to 10,000 writes. `maxPendingWrites` changes the cap; overflow drops the oldest queued write while keeping its local effect. The native API has no overflow event.
+- Server duplicate suppression covers retries while the client's mark is retained. AOF recovery after the latest checkpoint can replay a write without its dedup mark; idle marks can also be swept after 24 hours when the map exceeds 10,000 clients. This is not an unconditional exactly-once guarantee.
+- A permanent refusal emits a live event and removes the write from the queue. A permitted watched snapshot restores the server value; an unwatched key can keep the refused local value. Refusal events are not saved for replay.
+- A storage error can leave a write applied in memory and eligible to sync without saving it. Handle errors instead of assuming rollback.
+- SQLite uses WAL with `synchronous = NORMAL`. Committed data survives an app kill; an OS crash or power loss can lose recent commits.
+
+Binary reads return `Data`; `getString` fails on invalid UTF-8, while text observers return `nil`. TTL reads use seconds (`-1` without expiry, `-2` when absent), and positive TTL writes round up to whole seconds. Reads mask expired values; offline expiry alone does not notify observers because there is no local expiry timer. The native wrappers expose strings, bytes, counters, and JSON operations; they do not expose individual collection commands or pub/sub.
+
+Omitting the config URL keeps the cache local; writes still enter the outbox for a later open with a server URL. See [client support and limits](https://recached.dev/guide/client-support) for the shared protocol and adapter differences.
 
 ## How it fits together
 
