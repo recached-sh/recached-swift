@@ -130,6 +130,23 @@ the result whenever the core changes; CI fails if it differs from what
 
 Style: `swift format lint --strict --recursive Sources/Recached Tests Package.swift`.
 
+## Demo
+
+`Demo/` is a small SwiftUI checklist on this package: items in creation order,
+tick and swipe to delete, the connection state and unsynced writes in the
+toolbar. Generate its project with [XcodeGen](https://github.com/yonaskolb/XcodeGen):
+
+```sh
+scripts/build-engine.sh ../recached         # on a Mac: the XCFramework and server
+(cd engine/host && ./recached-server &)     # ws://127.0.0.1:6380
+cd Demo && xcodegen && open RecachedDemo.xcodeproj
+```
+
+The simulator shares the Mac's network, so the default server URL works
+as-is; launch with `-server ws://…` to use another. Its UI tests check an item
+added offline survives a relaunch still queued, and that it syncs when a server
+is running.
+
 ## License
 
 Apache-2.0.

@@ -1,0 +1,48 @@
+# The checklist demo, as an XcodeGen spec: `brew install xcodegen && xcodegen`
+# in this directory writes RecachedDemo.xcodeproj (not committed).
+name: RecachedDemo
+options:
+  bundleIdPrefix: dev.recached
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  Recached:
+    path: ..
+targets:
+  RecachedDemo:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: Recached
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Recached Checklist
+        UILaunchScreen: {}
+        # Plain ws:// only to a development server on this Mac (the
+        # simulator shares its network). Anything else needs wss://.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.recached.demo
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+  RecachedDemoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: RecachedDemo
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+schemes:
+  RecachedDemo:
+    build:
+      targets:
+        RecachedDemo: all
+    test:
+      targets: [RecachedDemoUITests]
