@@ -132,3 +132,15 @@ final class ChangeBusTests: XCTestCase {
         XCTAssertEqual(calls.withLock { $0 }.sorted(), ["k", "p"])
     }
 }
+
+final class BroadcastTests: XCTestCase {
+    func testEveryStreamGetsWhatIsSentAfterItStarts() async {
+        let broadcast = Broadcast<Int>(buffer: 8)
+        broadcast.send(0)  // before any stream: nobody hears it
+        let first = Recorder(broadcast.stream())
+        let second = Recorder(broadcast.stream())
+        broadcast.send(1)
+        broadcast.send(2)
+        await eventually { first.values == [1, 2] && second.values == [1, 2] }
+    }
+}

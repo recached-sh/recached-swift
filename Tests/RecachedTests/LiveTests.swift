@@ -122,4 +122,35 @@ final class LiveTests: XCTestCase {
             try b.getString("status") == "written during the outage"
         }
     }
+
+    func testAWriteTheServerRefusesIsReportedAndLeavesTheQueue() async throws {
+        let a = try connect(phone)
+        try a.set("count", "not a number")
+        await eventually { a.pendingWrites == 0 }
+
+        // The tablet does not watch "count", so its local copy increments
+        // from nothing; the server's copy is text and refuses the increment.
+        let b = try connect(tablet)
+        let refusals = Recorder(b.refusedWrites())
+        await connected(b)
+        try b.incr("count")
+        await eventually("the refusal to be reported") { !refusals.values.isEmpty }
+        XCTAssertEqual(refusals.values.first?.keys, ["count"])
+        XCTAssertEqual(b.pendingWrites, 0, "replaying it would be refused again")
+    }
+
+    func testAnExpiringKeyKeepsItsExpiryWhenTheServerCopyArrives() async throws {
+        let a = try connect(phone)
+        a.watch("session:*")
+        await connected(a)
+        try a.set("session:1", "token", ttl: 600)
+        await eventually { a.pendingWrites == 0 }
+        try await Task.sleep(nanoseconds: 300_000_000)  // the write's own echo
+        XCTAssert((590...600).contains(a.ttl("session:1")), "ttl \(a.ttl("session:1"))")
+
+        let b = try connect(tablet)
+        b.watch("session:*")
+        try await eventually("the snapshot") { try b.getString("session:1") == "token" }
+        XCTAssert((590...600).contains(b.ttl("session:1")), "ttl \(b.ttl("session:1"))")
+    }
 }
