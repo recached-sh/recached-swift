@@ -116,3 +116,18 @@ jobs:
           SCHEME="$(xcodebuild -list -json | python3 -c 'import json,sys; s=json.load(sys.stdin)["workspace"]["schemes"]; print(next((x for x in s if x.endswith("-Package")), s[0]))')"
           DEVICE="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')"
           xcodebuild test -scheme "$SCHEME" -destination "id=$DEVICE"
+
+      # The checklist demo: generated with XcodeGen, built for the simulator,
+      # and driven through its UI. A real server on this Mac lets the sync
+      # test run too; the simulator shares the Mac's network.
+      - name: Demo app (UI tests on an iOS simulator)
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          (cd Demo && xcodegen)
+          mkdir -p "$RUNNER_TEMP/server"
+          (cd "$RUNNER_TEMP/server" && RECACHED_BIND=127.0.0.1 RECACHED_SAVE_INTERVAL=0 RECACHED_METRICS_PORT=0 \
+            "$GITHUB_WORKSPACE/engine/host/recached-server" > server.log 2>&1 &)
+          DEVICE="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')"
+          TEST_RUNNER_RECACHED_DEMO_SERVER=ws://127.0.0.1:6380 \
+            xcodebuild test -project Demo/RecachedDemo.xcodeproj -scheme RecachedDemo -destination "id=$DEVICE"
