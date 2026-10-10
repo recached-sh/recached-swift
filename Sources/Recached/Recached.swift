@@ -26,6 +26,7 @@ public final class Recached: Sendable {
     private let bus: ChangeBus
     private let pending: StateCell<Int>
     private let state: StateCell<ConnectionState>
+    private let refused: Broadcast<RefusedWrite>
     private let transport: Transport?
     private let hooks = Locked<[Registration]>([])
 
@@ -33,7 +34,9 @@ public final class Recached: Sendable {
         let bus = ChangeBus(anyMatches: { anyKeyMatches(pattern: $0, keys: $1) })
         let pending = StateCell(Int(client.pendingWrites()))
         let state = StateCell(config.url == nil ? ConnectionState.offline : .connecting)
+        let refused = Broadcast<RefusedWrite>(buffer: 64)
         self.client = client
+        self.refused = refused
         self.bus = bus
         self.pending = pending
         self.state = state
@@ -45,6 +48,7 @@ public final class Recached: Sendable {
                 state: state,
                 onChanged: { bus.publish($0) },
                 onUnknownChange: { bus.invalidateAll() },
+                onRefused: { refused.send($0) },
                 onAcknowledged: { pending.set(Int(client.pendingWrites())) }
             )
         }
@@ -245,6 +249,17 @@ public final class Recached: Sendable {
 
     /// ``pendingWrites`` now, then each change.
     public func pendingWriteCounts() -> AsyncStream<Int> { pending.stream() }
+
+    /// Writes the server refused for good — a key outside the sync token's
+    /// scope or read-only to it, a wrong type — which left the queue without
+    /// reaching the server. Iterate it for the life of the cache: a stream
+    /// yields only refusals made after it starts, keeping the newest 64 it has
+    /// not delivered yet.
+    ///
+    /// A refusal that can clear, such as a sync token the server has not
+    /// accepted yet, is not reported: the write stays queued and is retried on
+    /// every reconnect, with a growing backoff, until it is accepted.
+    public func refusedWrites() -> AsyncStream<RefusedWrite> { refused.stream() }
 
     /// Stop syncing. Reads and writes keep working locally, and queued writes
     /// stay on disk for the next open.

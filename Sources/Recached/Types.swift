@@ -43,6 +43,24 @@ public enum ConnectionState: Sendable, Equatable {
     case waiting
 }
 
+/// A write the server will never apply, from ``Recached/refusedWrites()``.
+///
+/// Its local effect stays: the cache cannot undo it. Keys a
+/// ``Recached/watch(_:)`` pattern covers get the server's values back from a
+/// fresh snapshot a moment later; any other key keeps the refused value until
+/// the app changes it.
+public struct RefusedWrite: Sendable, Hashable {
+    /// The keys the write would have changed.
+    public let keys: [String]
+    /// The server's error, such as `NOSCOPE key 'k' is read-only on this connection`.
+    public let reason: String
+
+    public init(keys: [String], reason: String) {
+        self.keys = keys
+        self.reason = reason
+    }
+}
+
 /// One key and its value, from ``Recached/getMatching(_:)`` or
 /// ``Recached/observeMatching(_:)``.
 public struct Entry: Sendable, Hashable {

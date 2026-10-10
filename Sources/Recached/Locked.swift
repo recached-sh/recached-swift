@@ -63,3 +63,38 @@ final class StateCell<Value: Sendable & Equatable>: @unchecked Sendable {
         continuations[id] = nil
     }
 }
+
+/// Events fanned out to every current stream. Unlike ``StateCell`` there is no
+/// current value: a stream yields what happens after it starts, keeping the
+/// newest `buffer` events a slow consumer has not taken yet.
+final class Broadcast<Event: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let buffer: Int
+    private var continuations: [UUID: AsyncStream<Event>.Continuation] = [:]
+
+    init(buffer: Int) {
+        self.buffer = buffer
+    }
+
+    func send(_ event: Event) {
+        lock.lock()
+        defer { lock.unlock() }
+        for continuation in continuations.values { continuation.yield(event) }
+    }
+
+    func stream() -> AsyncStream<Event> {
+        AsyncStream(bufferingPolicy: .bufferingNewest(buffer)) { continuation in
+            let id = UUID()
+            continuation.onTermination = { [weak self] _ in self?.remove(id) }
+            lock.lock()
+            defer { lock.unlock() }
+            continuations[id] = continuation
+        }
+    }
+
+    private func remove(_ id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        continuations[id] = nil
+    }
+}

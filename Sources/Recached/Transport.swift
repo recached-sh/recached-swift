@@ -22,6 +22,8 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
     private let onChanged: @Sendable ([String]) -> Void
     /// A frame changed something that could not be saved, so its keys are unknown.
     private let onUnknownChange: @Sendable () -> Void
+    /// The server refused a queued write for good; called outside `lock`.
+    private let onRefused: @Sendable (RefusedWrite) -> Void
     /// The pending-write count may have moved.
     private let onAcknowledged: @Sendable () -> Void
 
@@ -44,6 +46,7 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         state: StateCell<ConnectionState>,
         onChanged: @escaping @Sendable ([String]) -> Void,
         onUnknownChange: @escaping @Sendable () -> Void,
+        onRefused: @escaping @Sendable (RefusedWrite) -> Void,
         onAcknowledged: @escaping @Sendable () -> Void
     ) {
         self.client = client
@@ -51,6 +54,7 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         self.state = state
         self.onChanged = onChanged
         self.onUnknownChange = onUnknownChange
+        self.onRefused = onRefused
         self.onAcknowledged = onAcknowledged
         super.init()
         // A serial delegate queue: socket callbacks arrive one at a time.
@@ -158,8 +162,11 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
 
         if let outcome {
             onChanged(outcome.changedKeys)
-            // Reply matching can no longer be trusted; the reconnect rebuilds
-            // it and the outbox replays.
+            if let refused = outcome.refused {
+                onRefused(RefusedWrite(keys: refused.keys, reason: refused.reason))
+            }
+            // Reply matching can no longer be trusted, or the server deferred
+            // a write: the reconnect rebuilds the one and replays the other.
             if outcome.reconnect {
                 socket.cancel(with: .protocolError, reason: nil)
                 return

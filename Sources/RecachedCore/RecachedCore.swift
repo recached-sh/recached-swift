@@ -860,7 +860,7 @@ public protocol RecachedClientProtocol: AnyObject, Sendable {
     
     /**
      * Handle one incoming frame: apply it, persist what it changed, and
-     * retire the queued write its reply acknowledges.
+     * retire the queued write its reply acknowledges or refuses for good.
      *
      * An `Err` means the frame was applied in memory but could not be saved;
      * the next snapshot from the server repairs the saved copy.
@@ -916,7 +916,7 @@ public protocol RecachedClientProtocol: AnyObject, Sendable {
     func set(key: String, value: Data) throws 
     
     /**
-     * Set a value that expires after `seconds`.
+     * Set a value that expires after `seconds`, which must be at least 1.
      */
     func setEx(key: String, value: Data, seconds: UInt64) throws 
     
@@ -1074,7 +1074,7 @@ open func exists(key: String) -> Bool  {
     
     /**
      * Handle one incoming frame: apply it, persist what it changed, and
-     * retire the queued write its reply acknowledges.
+     * retire the queued write its reply acknowledges or refuses for good.
      *
      * An `Err` means the frame was applied in memory but could not be saved;
      * the next snapshot from the server repairs the saved copy.
@@ -1212,7 +1212,7 @@ open func set(key: String, value: Data)throws   {try rustCallWithError(FfiConver
 }
     
     /**
-     * Set a value that expires after `seconds`.
+     * Set a value that expires after `seconds`, which must be at least 1.
      */
 open func setEx(key: String, value: Data, seconds: UInt64)throws   {try rustCallWithError(FfiConverterTypeRecachedError_lift) {
         uniffiCallStatus in
@@ -1484,11 +1484,19 @@ public struct FrameOutcome: Equatable, Hashable {
      */
     public var changedKeys: [String]
     /**
-     * The frame could not be parsed, so reply matching can no longer be
-     * trusted. Close the socket; the reconnect rebuilds it, and nothing queued
-     * is lost.
+     * Close the socket and reconnect after the delay
+     * [`connection_closed`](RecachedClient::connection_closed) returns.
+     * Nothing queued is lost. Either reply matching can no longer be trusted
+     * (the frame could not be parsed), or the server deferred a queued write
+     * for a reason that can clear, such as a sync token it has not accepted
+     * yet, and the reconnect replays it.
      */
     public var reconnect: Bool
+    /**
+     * A queued write the server refused for good, now removed from the
+     * outbox. Tell the application: it never reached the server.
+     */
+    public var refused: RefusedWrite?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1498,12 +1506,20 @@ public struct FrameOutcome: Equatable, Hashable {
          * observers. A key can appear whose value came out the same.
          */changedKeys: [String], 
         /**
-         * The frame could not be parsed, so reply matching can no longer be
-         * trusted. Close the socket; the reconnect rebuilds it, and nothing queued
-         * is lost.
-         */reconnect: Bool) {
+         * Close the socket and reconnect after the delay
+         * [`connection_closed`](RecachedClient::connection_closed) returns.
+         * Nothing queued is lost. Either reply matching can no longer be trusted
+         * (the frame could not be parsed), or the server deferred a queued write
+         * for a reason that can clear, such as a sync token it has not accepted
+         * yet, and the reconnect replays it.
+         */reconnect: Bool, 
+        /**
+         * A queued write the server refused for good, now removed from the
+         * outbox. Tell the application: it never reached the server.
+         */refused: RefusedWrite?) {
         self.changedKeys = changedKeys
         self.reconnect = reconnect
+        self.refused = refused
     }
 
     
@@ -1523,13 +1539,15 @@ public struct FfiConverterTypeFrameOutcome: FfiConverterRustBuffer {
         return
             try FrameOutcome(
                 changedKeys: FfiConverterSequenceString.read(from: &buf), 
-                reconnect: FfiConverterBool.read(from: &buf)
+                reconnect: FfiConverterBool.read(from: &buf), 
+                refused: FfiConverterOptionTypeRefusedWrite.read(from: &buf)
         )
     }
 
     public static func write(_ value: FrameOutcome, into buf: inout [UInt8]) {
         FfiConverterSequenceString.write(value.changedKeys, into: &buf)
         FfiConverterBool.write(value.reconnect, into: &buf)
+        FfiConverterOptionTypeRefusedWrite.write(value.refused, into: &buf)
     }
 }
 
@@ -1546,6 +1564,81 @@ public func FfiConverterTypeFrameOutcome_lift(_ buf: RustBuffer) throws -> Frame
 #endif
 public func FfiConverterTypeFrameOutcome_lower(_ value: FrameOutcome) -> RustBuffer {
     return FfiConverterTypeFrameOutcome.lower(value)
+}
+
+
+/**
+ * A write the server will never apply, from [`FrameOutcome::refused`].
+ *
+ * Its local effect stays, since the client cannot undo it. Keys a watched
+ * pattern covers get the server's values back from a fresh snapshot shortly
+ * after; any other key keeps the refused value until the app changes it.
+ */
+public struct RefusedWrite: Equatable, Hashable {
+    /**
+     * The keys the write would have changed.
+     */
+    public var keys: [String]
+    /**
+     * The server's error, such as `NOSCOPE key 'k' is read-only on this
+     * connection`.
+     */
+    public var reason: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The keys the write would have changed.
+         */keys: [String], 
+        /**
+         * The server's error, such as `NOSCOPE key 'k' is read-only on this
+         * connection`.
+         */reason: String) {
+        self.keys = keys
+        self.reason = reason
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RefusedWrite: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRefusedWrite: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RefusedWrite {
+        return
+            try RefusedWrite(
+                keys: FfiConverterSequenceString.read(from: &buf), 
+                reason: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RefusedWrite, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.keys, into: &buf)
+        FfiConverterString.write(value.reason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRefusedWrite_lift(_ buf: RustBuffer) throws -> RefusedWrite {
+    return try FfiConverterTypeRefusedWrite.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRefusedWrite_lower(_ value: RefusedWrite) -> RustBuffer {
+    return FfiConverterTypeRefusedWrite.lower(value)
 }
 
 
@@ -1739,6 +1832,30 @@ fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeRefusedWrite: FfiConverterRustBuffer {
+    typealias SwiftType = RefusedWrite?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeRefusedWrite.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeRefusedWrite.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -1837,7 +1954,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_recached_mobile_checksum_method_recachedclient_exists() != 55894) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_recached_mobile_checksum_method_recachedclient_frame_received() != 7446) {
+    if (uniffi_recached_mobile_checksum_method_recachedclient_frame_received() != 23002) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recached_mobile_checksum_method_recachedclient_get() != 22371) {
@@ -1867,7 +1984,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_recached_mobile_checksum_method_recachedclient_set() != 16381) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_recached_mobile_checksum_method_recachedclient_set_ex() != 8483) {
+    if (uniffi_recached_mobile_checksum_method_recachedclient_set_ex() != 62739) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recached_mobile_checksum_method_recachedclient_set_sync_token() != 17891) {

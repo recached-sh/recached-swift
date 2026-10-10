@@ -80,6 +80,19 @@ cache.connectionStates()     // AsyncStream of both, starting with the current v
 cache.pendingWriteCounts()
 ```
 
+A write the server refuses for good, such as one to a key the sync token makes
+read-only, leaves the queue without reaching the server. Iterate
+`refusedWrites()` to hear about it:
+
+```swift
+for await refused in cache.refusedWrites() {
+    print("not saved: \(refused.keys): \(refused.reason)")
+}
+```
+
+A refusal that can clear, such as a sync token the server has not accepted yet,
+keeps the write queued; it is retried on every reconnect until it goes through.
+
 Other calls: `incr(_:by:)` (a counter that merges with other clients'
 increments instead of overwriting them), `setJSON` / `mergeJSON` /
 `getJSON`, `set(_:_:ttl:)`, `delete`, `getMatching`, `setSyncToken`,
