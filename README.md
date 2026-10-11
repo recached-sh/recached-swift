@@ -17,24 +17,16 @@ iOS and macOS.
 Built on `recached-mobile`, the Rust core it shares with the Android SDK,
 through [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
-> **Status: 0.1.0, unreleased preview.** The API and native core are implemented. `Package.swift` has no released XCFramework URL or checksum, so Apple builds currently require the local core build below. CI's core ref is recorded in `engine.properties`.
+> **Status: 0.1.0, preview.** Built on the native core of recached v0.4.0. The API may still change before 1.0.
 
-## Build and install the preview
+## Install
 
-On a Mac with Xcode and Rust, build from a recached checkout containing `recached-mobile`:
-
-```sh
-git clone --branch dev https://github.com/recached-sh/recached.git
-git clone https://github.com/recached-sh/recached-swift.git
-cd recached-swift
-scripts/build-engine.sh ../recached
-```
-
-Add this directory as a local package in Xcode, or use a path dependency from a SwiftPM app beside the checkout:
+In Xcode, **File → Add Package Dependencies…** with
+`https://github.com/recached-sh/recached-swift`, or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(path: "../recached-swift")
+    .package(url: "https://github.com/recached-sh/recached-swift", from: "0.1.0")
 ],
 targets: [
     .target(name: "App", dependencies: [
@@ -43,7 +35,7 @@ targets: [
 ]
 ```
 
-A versioned remote dependency is not the install path until the package pins a released XCFramework. Supports iOS 15+ and macOS 12+. Linux is a contributor test path using the staged system library.
+The native core comes as a prebuilt XCFramework from the recached v0.4.0 release, so building needs no Rust. Supports iOS 15+ and macOS 12+. Linux is a contributor test path using the staged system library.
 
 ## Use
 
@@ -164,8 +156,10 @@ On Linux, `URLSessionWebSocketTask` needs a libcurl built with WebSocket
 support, which Ubuntu 24.04's (8.5) is not. The live tests then skip with that
 reason; they always run on macOS CI.
 
-On macOS, `scripts/build-engine.sh` also builds `engine/RecachedFFI.xcframework`,
-and `swift test` runs everything. The live tests start the staged
+On macOS, `swift test` runs everything against the released XCFramework that
+`Package.swift` pins. To work against an unreleased core, empty `engineURL` and
+`engineChecksum` there: Apple builds then use the `engine/RecachedFFI.xcframework`
+that `scripts/build-engine.sh` builds on a Mac. The live tests start the staged
 `recached-server` themselves, on free loopback ports. They skip on the iOS
 simulator, which cannot start processes.
 

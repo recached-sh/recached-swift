@@ -6,8 +6,8 @@ import PackageDescription
 // engine/RecachedFFI.xcframework, built from a recached checkout by
 // scripts/build-engine.sh on a Mac. Pinning a release also means committing
 // that release's generated Sources/RecachedCore/RecachedCore.swift.
-let engineURL = ""
-let engineChecksum = ""
+let engineURL = "https://github.com/recached-sh/recached/releases/download/v0.4.0/RecachedFFI-0.4.0.xcframework.zip"
+let engineChecksum = "75da177566d1e2049a4a88cf048c67d6336a00f2b8b462f1461a5ff95e194f57"
 
 #if os(Linux)
     // On Linux the core is a system library: scripts/build-engine.sh stages the
