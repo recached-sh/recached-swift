@@ -14,8 +14,9 @@ import RecachedCore
 /// - **Writes** (``set(_:_:)-(String,String)``, ``delete(_:)``,
 ///   ``incr(_:by:)``, …) apply locally, are saved together with their place in
 ///   the outbox before the call returns, and go to the server now or after the
-///   next reconnect. Each reaches the server exactly once, even if the app is
-///   killed in between.
+///   next reconnect. A write that throws left nothing behind. A retried write
+///   is not applied twice while the server keeps its duplicate-suppression
+///   record.
 /// - **Observers** (``observe(_:)``, ``observeMatching(_:)``) yield the
 ///   current value and then every change, from this device or any other. A
 ///   write to one key wakes only that key's observers.
@@ -29,12 +30,15 @@ public final class Recached: Sendable {
     private let refused: Broadcast<RefusedWrite>
     private let transport: Transport?
     private let hooks = Locked<[Registration]>([])
+    private let sync: SyncCells
 
     private init(client: RecachedClient, config: RecachedConfig, sessionConfiguration: URLSessionConfiguration) {
         let bus = ChangeBus(anyMatches: { anyKeyMatches(pattern: $0, keys: $1) })
         let pending = StateCell(Int(client.pendingWrites()))
         let state = StateCell(config.url == nil ? ConnectionState.offline : .connecting)
         let refused = Broadcast<RefusedWrite>(buffer: 64)
+        let sync = SyncCells(client: client)
+        self.sync = sync
         self.client = client
         self.refused = refused
         self.bus = bus
@@ -49,7 +53,8 @@ public final class Recached: Sendable {
                 onChanged: { bus.publish($0) },
                 onUnknownChange: { bus.invalidateAll() },
                 onRefused: { refused.send($0) },
-                onAcknowledged: { pending.set(Int(client.pendingWrites())) }
+                onAcknowledged: { pending.set(Int(client.pendingWrites())) },
+                onSyncChanged: { sync.refresh() }
             )
         }
         if let transport {
@@ -86,7 +91,8 @@ public final class Recached: Sendable {
                 config: ClientConfig(
                     password: config.password,
                     syncToken: config.syncToken,
-                    maxPendingWrites: config.maxPendingWrites
+                    maxPendingWrites: config.maxPendingWrites,
+                    evictOldestWhenFull: config.evictOldestWhenFull
                 )
             )
         }
@@ -200,9 +206,8 @@ public final class Recached: Sendable {
     }
 
     private func write<T>(_ key: String, _ body: () throws -> T) throws -> T {
-        // Also after a storage error, which leaves the change applied in
-        // memory; a refused command changed nothing, and observers re-read the
-        // same value and yield nothing.
+        // Also after an error, harmlessly: a failed write changed nothing, and
+        // observers re-read the same value and yield nothing.
         defer {
             bus.publish([key])
             pending.set(Int(client.pendingWrites()))
@@ -219,11 +224,13 @@ public final class Recached: Sendable {
     /// Not remembered across opens; call it again at startup.
     public func watch(_ pattern: String) {
         client.watch(pattern: pattern)
+        sync.refresh()
     }
 
     /// Stop syncing `pattern`. Local copies of its keys stay readable.
     public func unwatch(_ pattern: String) {
         client.unwatch(pattern: pattern)
+        sync.refresh()
     }
 
     /// Replace the sync token, e.g. after refreshing it. Sent now and on every reconnect.
@@ -238,7 +245,25 @@ public final class Recached: Sendable {
         transport?.connect()
     }
 
-    /// Where the connection stands. Always ``ConnectionState/offline`` without a URL.
+    /// Where synchronization stands. ``SyncPhase/ready`` needs more than an
+    /// open socket — see ``SyncPhase``. Prefer this to ``connectionState`` for
+    /// "synced" indicators.
+    public var syncStatus: SyncStatus { sync.status.current }
+
+    /// ``syncStatus`` now, then each change, pushed as it happens.
+    public func syncStatuses() -> AsyncStream<SyncStatus> { sync.status.stream() }
+
+    /// Each watched pattern's progress: a pattern watched later can hydrate
+    /// while the rest are current.
+    public var subscriptionStates: [String: SubscriptionState] { sync.subscriptions.current }
+
+    /// ``subscriptionStates`` now, then each change.
+    public func subscriptionStateChanges() -> AsyncStream<[String: SubscriptionState]> {
+        sync.subscriptions.stream()
+    }
+
+    /// Where the socket stands. Always ``ConnectionState/offline`` without a
+    /// URL. ``ConnectionState/connected`` means open, not synchronized.
     public var connectionState: ConnectionState { state.current }
 
     /// ``connectionState`` now, then each change.
@@ -322,5 +347,44 @@ public final class Recached: Sendable {
             continuation.onTermination = { _ in registration.cancel() }
             emit()
         }
+    }
+}
+
+/// The status and the patterns' progress, read from the core and published
+/// as one step under one lock, so an older status never overwrites a newer
+/// one. Patterns go first: a consumer that sees `ready` finds the patterns it
+/// waited for already current.
+final class SyncCells: @unchecked Sendable {
+    let status: StateCell<SyncStatus>
+    let subscriptions = StateCell<[String: SubscriptionState]>([:])
+    private let client: RecachedClient
+    private let lock = NSLock()
+    private var lastSyncedAt: Date?
+
+    init(client: RecachedClient) {
+        self.client = client
+        let initial = client.syncStatus()
+        status = StateCell(
+            SyncStatus(phase: SyncPhase(initial.phase), problem: initial.error.map(SyncProblem.init)))
+    }
+
+    func refresh() {
+        lock.lock()
+        defer { lock.unlock() }
+        let changes = client.takeSubscriptionChanges()
+        if !changes.isEmpty {
+            var next = subscriptions.current
+            for change in changes {
+                next[change.pattern] = change.state.map(SubscriptionState.init)
+            }
+            subscriptions.set(next)
+        }
+        _ = client.takeStatusChange()
+        let core = client.syncStatus()
+        let phase = SyncPhase(core.phase)
+        if phase == .ready, status.current.phase != .ready {
+            lastSyncedAt = Date()
+        }
+        status.set(SyncStatus(phase: phase, problem: core.error.map(SyncProblem.init), lastSyncedAt: lastSyncedAt))
     }
 }

@@ -85,6 +85,27 @@ final class LocalTests: XCTestCase {
         cache.reconnectNow()  // a no-op, not an error
     }
 
+    func testAFullOutboxRefusesTheWriteAndChangesNothing() throws {
+        do {
+            let cache = try db.open(RecachedConfig(maxPendingWrites: 2))
+            try cache.set("a", "1")
+            try cache.set("b", "1")
+            XCTAssertThrowsError(try cache.set("a", "changed")) { error in
+                XCTAssertEqual(error as? RecachedError, .outboxFull(pending: 2, capacity: 2))
+            }
+            XCTAssertEqual(try cache.getString("a"), "1")
+            XCTAssertEqual(cache.pendingWrites, 2)
+        }
+        let reopened = try db.open(RecachedConfig(maxPendingWrites: 2))
+        XCTAssertEqual(reopened.pendingWrites, 2, "the queued writes are intact on disk")
+    }
+
+    func testWithoutAURLTheStatusStaysDisconnected() throws {
+        let cache = try db.open()
+        XCTAssertEqual(cache.syncStatus.phase, .disconnected)
+        XCTAssertNil(cache.syncStatus.lastSyncedAt)
+    }
+
     func testTheConfigNeverPrintsItsCredentials() {
         let text = RecachedConfig(url: URL(string: "wss://x"), password: "hunter2", syncToken: "secret").description
         XCTAssertFalse(text.contains("hunter2") || text.contains("secret"), text)

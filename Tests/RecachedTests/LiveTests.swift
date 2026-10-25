@@ -153,4 +153,38 @@ final class LiveTests: XCTestCase {
         try await eventually("the snapshot") { try b.getString("session:1") == "token" }
         XCTAssert((590...600).contains(b.ttl("session:1")), "ttl \(b.ttl("session:1"))")
     }
+
+    func testTheStatusIsReadyOnlyAfterReplayAndHydration() async throws {
+        do {
+            let offline = try phone.open()
+            try offline.set("queued:1", "v")
+        }
+        let a = try connect(phone)
+        a.watch("queued:*")
+        let phases = Recorder(a.syncStatuses())
+        await eventually("ready") { a.syncStatus.phase == .ready }
+        XCTAssertEqual(a.pendingWrites, 0)
+        let seen = phases.values.map(\.phase)
+        if let replaying = seen.firstIndex(of: .replaying), let ready = seen.firstIndex(of: .ready) {
+            XCTAssertLessThan(replaying, ready, "\(seen)")
+        }
+        XCTAssertNotNil(a.syncStatus.lastSyncedAt)
+        // watch() may run before or after the socket opens; either way the
+        // pattern ends current.
+        await eventually("the pattern's snapshot") { a.subscriptionStates["queued:*"] == .current }
+        XCTAssertEqual(try a.getString("queued:1"), "v")
+    }
+
+    func testAPatternWatchedLaterHydratesWhileTheConnectionStaysReady() async throws {
+        let b = try connect(tablet)
+        try b.set("late:1", "x")
+        await eventually("acknowledged") { b.pendingWrites == 0 }
+        let a = try connect(phone)
+        a.watch("early:*")
+        await eventually("ready") { a.syncStatus.phase == .ready }
+        a.watch("late:*")
+        await eventually("the late pattern's snapshot") { a.subscriptionStates["late:*"] == .current }
+        XCTAssertEqual(a.syncStatus.phase, .ready)
+        XCTAssertEqual(try a.getString("late:1"), "x")
+    }
 }

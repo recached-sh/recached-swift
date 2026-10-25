@@ -94,3 +94,58 @@ final class WeakModel<Model: AnyObject>: @unchecked Sendable {
         public var string: String? { value.flatMap { String(data: $0, encoding: .utf8) } }
     }
 #endif
+
+#if canImport(Combine)
+    /// ``Recached/syncStatus`` as an `ObservableObject`, for a "synced"
+    /// indicator in SwiftUI on iOS 15+ and macOS 12+:
+    ///
+    /// ```swift
+    /// @StateObject private var sync = ObservableSyncStatus(cache)
+    /// var body: some View { Text(sync.status.phase == .ready ? "Synced" : "Syncing…") }
+    /// ```
+    @MainActor
+    public final class ObservableSyncStatus: ObservableObject {
+        @Published public private(set) var status: SyncStatus
+        private var feed: Feed?
+
+        public init(_ cache: Recached) {
+            status = cache.syncStatus
+            let weak = WeakModel<ObservableSyncStatus>()
+            let stream = cache.syncStatuses()
+            feed = Feed(
+                Task { @MainActor in
+                    for await status in stream {
+                        guard let model = weak.model else { return }
+                        model.status = status
+                    }
+                })
+            weak.model = self
+        }
+    }
+#endif
+
+#if canImport(Observation)
+    /// ``Recached/syncStatus`` as an Observation model, for SwiftUI on iOS 17+
+    /// and macOS 14+.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @MainActor
+    @Observable
+    public final class ObservedSyncStatus {
+        public private(set) var status: SyncStatus
+        @ObservationIgnored private var feed: Feed?
+
+        public init(_ cache: Recached) {
+            status = cache.syncStatus
+            let weak = WeakModel<ObservedSyncStatus>()
+            let stream = cache.syncStatuses()
+            feed = Feed(
+                Task { @MainActor in
+                    for await status in stream {
+                        guard let model = weak.model else { return }
+                        model.status = status
+                    }
+                })
+            weak.model = self
+        }
+    }
+#endif

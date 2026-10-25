@@ -852,6 +852,12 @@ public protocol RecachedClientProtocol: AnyObject, Sendable {
     func connectionOpened(sink: FrameSink) 
     
     /**
+     * The app is about to open a socket. Optional: it only makes the status
+     * read `Connecting` until the socket opens or fails.
+     */
+    func connectionOpening() 
+    
+    /**
      * Delete a key. Returns whether it existed locally.
      */
     func del(key: String) throws  -> Bool
@@ -925,6 +931,36 @@ public protocol RecachedClientProtocol: AnyObject, Sendable {
      * connected, and on every later reconnect.
      */
     func setSyncToken(token: String) 
+    
+    /**
+     * One watched pattern's progress, or `None` when it is not watched.
+     */
+    func subscriptionState(pattern: String)  -> SubscriptionState?
+    
+    /**
+     * Diagnostic counters.
+     */
+    func syncCounters()  -> SyncCounters
+    
+    /**
+     * Where synchronization stands. `Ready` needs more than an open socket:
+     * authentication, the replay of every queued write, and the snapshot of
+     * every pattern watched when the socket opened.
+     */
+    func syncStatus()  -> SyncStatus
+    
+    /**
+     * The status, when it changed since this (or a
+     * [`FrameOutcome::status`]) last reported it. Call after
+     * `connection_opening`, `connection_opened`, `connection_closed`,
+     * `watch` and `unwatch` to push changes to observers without polling.
+     */
+    func takeStatusChange()  -> SyncStatus?
+    
+    /**
+     * Patterns whose progress changed since the last call, each once.
+     */
+    func takeSubscriptionChanges()  -> [SubscriptionChange]
     
     /**
      * Remaining time to live in seconds: `-1` without an expiry, `-2` when
@@ -1045,6 +1081,18 @@ open func connectionOpened(sink: FrameSink)  {try! rustCall() {
     uniffi_recached_mobile_fn_method_recachedclient_connection_opened(
             self.uniffiCloneHandle(),
         FfiConverterTypeFrameSink_lower(sink),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * The app is about to open a socket. Optional: it only makes the status
+     * read `Connecting` until the socket opens or fails.
+     */
+open func connectionOpening()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_recached_mobile_fn_method_recachedclient_connection_opening(
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
@@ -1239,6 +1287,72 @@ open func setSyncToken(token: String)  {try! rustCall() {
 }
     
     /**
+     * One watched pattern's progress, or `None` when it is not watched.
+     */
+open func subscriptionState(pattern: String) -> SubscriptionState?  {
+    return try!  FfiConverterOptionTypeSubscriptionState.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_recached_mobile_fn_method_recachedclient_subscription_state(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(pattern),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Diagnostic counters.
+     */
+open func syncCounters() -> SyncCounters  {
+    return try!  FfiConverterTypeSyncCounters_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_recached_mobile_fn_method_recachedclient_sync_counters(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Where synchronization stands. `Ready` needs more than an open socket:
+     * authentication, the replay of every queued write, and the snapshot of
+     * every pattern watched when the socket opened.
+     */
+open func syncStatus() -> SyncStatus  {
+    return try!  FfiConverterTypeSyncStatus_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_recached_mobile_fn_method_recachedclient_sync_status(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * The status, when it changed since this (or a
+     * [`FrameOutcome::status`]) last reported it. Call after
+     * `connection_opening`, `connection_opened`, `connection_closed`,
+     * `watch` and `unwatch` to push changes to observers without polling.
+     */
+open func takeStatusChange() -> SyncStatus?  {
+    return try!  FfiConverterOptionTypeSyncStatus.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_recached_mobile_fn_method_recachedclient_take_status_change(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Patterns whose progress changed since the last call, each once.
+     */
+open func takeSubscriptionChanges() -> [SubscriptionChange]  {
+    return try!  FfiConverterSequenceTypeSubscriptionChange.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_recached_mobile_fn_method_recachedclient_take_subscription_changes(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Remaining time to live in seconds: `-1` without an expiry, `-2` when
      * the key does not exist.
      */
@@ -1341,10 +1455,16 @@ public struct ClientConfig: Equatable, Hashable {
      */
     public var syncToken: String?
     /**
-     * Cap on queued, unacknowledged writes; past it the oldest is dropped.
-     * Defaults to 10,000.
+     * Cap on queued, unacknowledged writes; past it a write fails with
+     * `OutboxFull` and changes nothing. Defaults to 10,000.
      */
     public var maxPendingWrites: UInt32?
+    /**
+     * Past the cap, evict the oldest queued write instead of refusing the
+     * new one — the behaviour before 0.5. An evicted write never reaches
+     * the server, though the app may already have shown it as saved.
+     */
+    public var evictOldestWhenFull: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1356,12 +1476,18 @@ public struct ClientConfig: Equatable, Hashable {
          * Sent as `SYNC TOKEN` each time the socket opens.
          */syncToken: String? = nil, 
         /**
-         * Cap on queued, unacknowledged writes; past it the oldest is dropped.
-         * Defaults to 10,000.
-         */maxPendingWrites: UInt32? = nil) {
+         * Cap on queued, unacknowledged writes; past it a write fails with
+         * `OutboxFull` and changes nothing. Defaults to 10,000.
+         */maxPendingWrites: UInt32? = nil, 
+        /**
+         * Past the cap, evict the oldest queued write instead of refusing the
+         * new one — the behaviour before 0.5. An evicted write never reaches
+         * the server, though the app may already have shown it as saved.
+         */evictOldestWhenFull: Bool? = nil) {
         self.password = password
         self.syncToken = syncToken
         self.maxPendingWrites = maxPendingWrites
+        self.evictOldestWhenFull = evictOldestWhenFull
     }
 
     
@@ -1382,7 +1508,8 @@ public struct FfiConverterTypeClientConfig: FfiConverterRustBuffer {
             try ClientConfig(
                 password: FfiConverterOptionString.read(from: &buf), 
                 syncToken: FfiConverterOptionString.read(from: &buf), 
-                maxPendingWrites: FfiConverterOptionUInt32.read(from: &buf)
+                maxPendingWrites: FfiConverterOptionUInt32.read(from: &buf), 
+                evictOldestWhenFull: FfiConverterOptionBool.read(from: &buf)
         )
     }
 
@@ -1390,6 +1517,7 @@ public struct FfiConverterTypeClientConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.password, into: &buf)
         FfiConverterOptionString.write(value.syncToken, into: &buf)
         FfiConverterOptionUInt32.write(value.maxPendingWrites, into: &buf)
+        FfiConverterOptionBool.write(value.evictOldestWhenFull, into: &buf)
     }
 }
 
@@ -1497,6 +1625,11 @@ public struct FrameOutcome: Equatable, Hashable {
      * outbox. Tell the application: it never reached the server.
      */
     public var refused: RefusedWrite?
+    /**
+     * The synchronization status, when this frame changed it. Notify status
+     * observers.
+     */
+    public var status: SyncStatus?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -1516,10 +1649,15 @@ public struct FrameOutcome: Equatable, Hashable {
         /**
          * A queued write the server refused for good, now removed from the
          * outbox. Tell the application: it never reached the server.
-         */refused: RefusedWrite?) {
+         */refused: RefusedWrite?, 
+        /**
+         * The synchronization status, when this frame changed it. Notify status
+         * observers.
+         */status: SyncStatus?) {
         self.changedKeys = changedKeys
         self.reconnect = reconnect
         self.refused = refused
+        self.status = status
     }
 
     
@@ -1540,7 +1678,8 @@ public struct FfiConverterTypeFrameOutcome: FfiConverterRustBuffer {
             try FrameOutcome(
                 changedKeys: FfiConverterSequenceString.read(from: &buf), 
                 reconnect: FfiConverterBool.read(from: &buf), 
-                refused: FfiConverterOptionTypeRefusedWrite.read(from: &buf)
+                refused: FfiConverterOptionTypeRefusedWrite.read(from: &buf), 
+                status: FfiConverterOptionTypeSyncStatus.read(from: &buf)
         )
     }
 
@@ -1548,6 +1687,7 @@ public struct FfiConverterTypeFrameOutcome: FfiConverterRustBuffer {
         FfiConverterSequenceString.write(value.changedKeys, into: &buf)
         FfiConverterBool.write(value.reconnect, into: &buf)
         FfiConverterOptionTypeRefusedWrite.write(value.refused, into: &buf)
+        FfiConverterOptionTypeSyncStatus.write(value.status, into: &buf)
     }
 }
 
@@ -1580,6 +1720,12 @@ public struct RefusedWrite: Equatable, Hashable {
      */
     public var keys: [String]
     /**
+     * Those of `keys` no watched pattern covers. Their local value is the
+     * refused one, and nothing will correct it: show the write as failed,
+     * and rewrite or re-read them.
+     */
+    public var unreconciled: [String]
+    /**
      * The server's error, such as `NOSCOPE key 'k' is read-only on this
      * connection`.
      */
@@ -1592,10 +1738,16 @@ public struct RefusedWrite: Equatable, Hashable {
          * The keys the write would have changed.
          */keys: [String], 
         /**
+         * Those of `keys` no watched pattern covers. Their local value is the
+         * refused one, and nothing will correct it: show the write as failed,
+         * and rewrite or re-read them.
+         */unreconciled: [String], 
+        /**
          * The server's error, such as `NOSCOPE key 'k' is read-only on this
          * connection`.
          */reason: String) {
         self.keys = keys
+        self.unreconciled = unreconciled
         self.reason = reason
     }
 
@@ -1616,12 +1768,14 @@ public struct FfiConverterTypeRefusedWrite: FfiConverterRustBuffer {
         return
             try RefusedWrite(
                 keys: FfiConverterSequenceString.read(from: &buf), 
+                unreconciled: FfiConverterSequenceString.read(from: &buf), 
                 reason: FfiConverterString.read(from: &buf)
         )
     }
 
     public static func write(_ value: RefusedWrite, into buf: inout [UInt8]) {
         FfiConverterSequenceString.write(value.keys, into: &buf)
+        FfiConverterSequenceString.write(value.unreconciled, into: &buf)
         FfiConverterString.write(value.reason, into: &buf)
     }
 }
@@ -1639,6 +1793,223 @@ public func FfiConverterTypeRefusedWrite_lift(_ buf: RustBuffer) throws -> Refus
 #endif
 public func FfiConverterTypeRefusedWrite_lower(_ value: RefusedWrite) -> RustBuffer {
     return FfiConverterTypeRefusedWrite.lower(value)
+}
+
+
+/**
+ * A watched pattern whose [`SubscriptionState`] changed, from
+ * [`RecachedClient::take_subscription_changes`]. `state` is `None` when the
+ * pattern was unwatched.
+ */
+public struct SubscriptionChange: Equatable, Hashable {
+    public var pattern: String
+    public var state: SubscriptionState?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(pattern: String, state: SubscriptionState?) {
+        self.pattern = pattern
+        self.state = state
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SubscriptionChange: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSubscriptionChange: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SubscriptionChange {
+        return
+            try SubscriptionChange(
+                pattern: FfiConverterString.read(from: &buf), 
+                state: FfiConverterOptionTypeSubscriptionState.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SubscriptionChange, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.pattern, into: &buf)
+        FfiConverterOptionTypeSubscriptionState.write(value.state, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscriptionChange_lift(_ buf: RustBuffer) throws -> SubscriptionChange {
+    return try FfiConverterTypeSubscriptionChange.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscriptionChange_lower(_ value: SubscriptionChange) -> RustBuffer {
+    return FfiConverterTypeSubscriptionChange.lower(value)
+}
+
+
+/**
+ * Diagnostic counters since [`open`](crate::RecachedClient::open).
+ */
+public struct SyncCounters: Equatable, Hashable {
+    public var connections: UInt64
+    public var replayedWrites: UInt64
+    public var deferredWrites: UInt64
+    public var refusedWrites: UInt64
+    /**
+     * Writes refused locally because the outbox was full.
+     */
+    public var rejectedWrites: UInt64
+    /**
+     * Writes evicted under `evict_oldest_when_full`.
+     */
+    public var evictedWrites: UInt64
+    public var snapshotsApplied: UInt64
+    public var malformedFrames: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(connections: UInt64, replayedWrites: UInt64, deferredWrites: UInt64, refusedWrites: UInt64, 
+        /**
+         * Writes refused locally because the outbox was full.
+         */rejectedWrites: UInt64, 
+        /**
+         * Writes evicted under `evict_oldest_when_full`.
+         */evictedWrites: UInt64, snapshotsApplied: UInt64, malformedFrames: UInt64) {
+        self.connections = connections
+        self.replayedWrites = replayedWrites
+        self.deferredWrites = deferredWrites
+        self.refusedWrites = refusedWrites
+        self.rejectedWrites = rejectedWrites
+        self.evictedWrites = evictedWrites
+        self.snapshotsApplied = snapshotsApplied
+        self.malformedFrames = malformedFrames
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SyncCounters: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSyncCounters: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SyncCounters {
+        return
+            try SyncCounters(
+                connections: FfiConverterUInt64.read(from: &buf), 
+                replayedWrites: FfiConverterUInt64.read(from: &buf), 
+                deferredWrites: FfiConverterUInt64.read(from: &buf), 
+                refusedWrites: FfiConverterUInt64.read(from: &buf), 
+                rejectedWrites: FfiConverterUInt64.read(from: &buf), 
+                evictedWrites: FfiConverterUInt64.read(from: &buf), 
+                snapshotsApplied: FfiConverterUInt64.read(from: &buf), 
+                malformedFrames: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SyncCounters, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.connections, into: &buf)
+        FfiConverterUInt64.write(value.replayedWrites, into: &buf)
+        FfiConverterUInt64.write(value.deferredWrites, into: &buf)
+        FfiConverterUInt64.write(value.refusedWrites, into: &buf)
+        FfiConverterUInt64.write(value.rejectedWrites, into: &buf)
+        FfiConverterUInt64.write(value.evictedWrites, into: &buf)
+        FfiConverterUInt64.write(value.snapshotsApplied, into: &buf)
+        FfiConverterUInt64.write(value.malformedFrames, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncCounters_lift(_ buf: RustBuffer) throws -> SyncCounters {
+    return try FfiConverterTypeSyncCounters.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncCounters_lower(_ value: SyncCounters) -> RustBuffer {
+    return FfiConverterTypeSyncCounters.lower(value)
+}
+
+
+/**
+ * The connection's synchronization status.
+ */
+public struct SyncStatus: Equatable, Hashable {
+    public var phase: SyncPhase
+    /**
+     * What is wrong, when something is. While disconnected, what ended the
+     * last connection.
+     */
+    public var error: SyncError?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(phase: SyncPhase, 
+        /**
+         * What is wrong, when something is. While disconnected, what ended the
+         * last connection.
+         */error: SyncError?) {
+        self.phase = phase
+        self.error = error
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SyncStatus: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSyncStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SyncStatus {
+        return
+            try SyncStatus(
+                phase: FfiConverterTypeSyncPhase.read(from: &buf), 
+                error: FfiConverterOptionTypeSyncError.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SyncStatus, into buf: inout [UInt8]) {
+        FfiConverterTypeSyncPhase.write(value.phase, into: &buf)
+        FfiConverterOptionTypeSyncError.write(value.error, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncStatus_lift(_ buf: RustBuffer) throws -> SyncStatus {
+    return try FfiConverterTypeSyncStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncStatus_lower(_ value: SyncStatus) -> RustBuffer {
+    return FfiConverterTypeSyncStatus.lower(value)
 }
 
 
@@ -1674,6 +2045,19 @@ enum RecachedError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError 
      */
     case NotUtf8(key: String
     )
+    /**
+     * The write was refused before anything changed: `pending` writes wait
+     * for the server and the outbox holds `capacity`
+     * (`ClientConfig.max_pending_writes`). Nothing was applied, stored or
+     * sent, and every queued write is intact. Retry once it drains.
+     */
+    case OutboxFull(pending: UInt64, capacity: UInt64
+    )
+    /**
+     * This session has used every write id it can carry (four billion).
+     * Nothing was applied; reopen the client to start a new session.
+     */
+    case WriteIdsExhausted
 
     
 
@@ -1712,6 +2096,11 @@ public struct FfiConverterTypeRecachedError: FfiConverterRustBuffer {
         case 3: return .NotUtf8(
             key: try FfiConverterString.read(from: &buf)
             )
+        case 4: return .OutboxFull(
+            pending: try FfiConverterUInt64.read(from: &buf), 
+            capacity: try FfiConverterUInt64.read(from: &buf)
+            )
+        case 5: return .WriteIdsExhausted
 
          default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1738,6 +2127,16 @@ public struct FfiConverterTypeRecachedError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
             FfiConverterString.write(key, into: &buf)
             
+        
+        case let .OutboxFull(pending,capacity):
+            writeInt(&buf, Int32(4))
+            FfiConverterUInt64.write(pending, into: &buf)
+            FfiConverterUInt64.write(capacity, into: &buf)
+            
+        
+        case .WriteIdsExhausted:
+            writeInt(&buf, Int32(5))
+        
         }
     }
 }
@@ -1756,6 +2155,429 @@ public func FfiConverterTypeRecachedError_lift(_ buf: RustBuffer) throws -> Reca
 public func FfiConverterTypeRecachedError_lower(_ value: RecachedError) -> RustBuffer {
     return FfiConverterTypeRecachedError.lower(value)
 }
+
+
+/**
+ * Why a watched pattern was refused.
+ */
+
+public enum SubscriptionFailure: Equatable, Hashable {
+    
+    /**
+     * More keys match than the server sends in one snapshot. Nothing local
+     * was reconciled against a partial one.
+     */
+    case snapshotTooLarge
+    /**
+     * Outside the sync token's scope.
+     */
+    case outOfScope
+    case other
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SubscriptionFailure: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSubscriptionFailure: FfiConverterRustBuffer {
+    typealias SwiftType = SubscriptionFailure
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SubscriptionFailure {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .snapshotTooLarge
+        
+        case 2: return .outOfScope
+        
+        case 3: return .other
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SubscriptionFailure, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .snapshotTooLarge:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .outOfScope:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .other:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscriptionFailure_lift(_ buf: RustBuffer) throws -> SubscriptionFailure {
+    return try FfiConverterTypeSubscriptionFailure.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscriptionFailure_lower(_ value: SubscriptionFailure) -> RustBuffer {
+    return FfiConverterTypeSubscriptionFailure.lower(value)
+}
+
+
+
+/**
+ * One watched pattern's progress.
+ */
+
+public enum SubscriptionState: Equatable, Hashable {
+    
+    /**
+     * Waiting for a connection; local copies are what the last session left.
+     */
+    case pending
+    /**
+     * Snapshot requested, not yet received.
+     */
+    case hydrating
+    /**
+     * Snapshot applied; changes stream as they happen.
+     */
+    case current
+    /**
+     * Refused by the server; retried on the next connection.
+     */
+    case failed(failure: SubscriptionFailure, reason: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SubscriptionState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSubscriptionState: FfiConverterRustBuffer {
+    typealias SwiftType = SubscriptionState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SubscriptionState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .hydrating
+        
+        case 3: return .current
+        
+        case 4: return .failed(failure: try FfiConverterTypeSubscriptionFailure.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SubscriptionState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .hydrating:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .current:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .failed(failure,reason):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeSubscriptionFailure.write(failure, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscriptionState_lift(_ buf: RustBuffer) throws -> SubscriptionState {
+    return try FfiConverterTypeSubscriptionState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSubscriptionState_lower(_ value: SubscriptionState) -> RustBuffer {
+    return FfiConverterTypeSubscriptionState.lower(value)
+}
+
+
+
+/**
+ * A connection-level synchronization problem. `reason` is the server's
+ * error text, which never contains a password or token.
+ */
+
+public enum SyncError: Equatable, Hashable {
+    
+    case authFailed(reason: String
+    )
+    case scopeRefused(reason: String
+    )
+    /**
+     * A queued write was refused for a reason that can clear; it stays
+     * queued and replays on the next connection.
+     */
+    case writeDeferred(reason: String
+    )
+    case subscriptionFailed(pattern: String, failure: SubscriptionFailure, reason: String
+    )
+    /**
+     * An incoming frame could not be parsed; the socket must be replaced.
+     */
+    case malformedFrame
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SyncError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSyncError: FfiConverterRustBuffer {
+    typealias SwiftType = SyncError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SyncError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .authFailed(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .scopeRefused(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .writeDeferred(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .subscriptionFailed(pattern: try FfiConverterString.read(from: &buf), failure: try FfiConverterTypeSubscriptionFailure.read(from: &buf), reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .malformedFrame
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SyncError, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .authFailed(reason):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .scopeRefused(reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .writeDeferred(reason):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .subscriptionFailed(pattern,failure,reason):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(pattern, into: &buf)
+            FfiConverterTypeSubscriptionFailure.write(failure, into: &buf)
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case .malformedFrame:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncError_lift(_ buf: RustBuffer) throws -> SyncError {
+    return try FfiConverterTypeSyncError.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncError_lower(_ value: SyncError) -> RustBuffer {
+    return FfiConverterTypeSyncError.lower(value)
+}
+
+
+
+/**
+ * Where the connection is in establishing synchronization. An open socket
+ * is only the start: see [`RecachedClient::sync_status`](crate::RecachedClient::sync_status).
+ */
+
+public enum SyncPhase: Equatable, Hashable {
+    
+    /**
+     * No socket, or the last one closed.
+     */
+    case disconnected
+    /**
+     * The app is opening a socket
+     * ([`connection_opening`](crate::RecachedClient::connection_opening)).
+     */
+    case connecting
+    /**
+     * `AUTH`, the protocol opt-ins or the sync token are not yet answered.
+     */
+    case authenticating
+    /**
+     * Writes queued while offline have been sent and not all answered.
+     */
+    case replaying
+    /**
+     * The snapshots of the patterns watched at connect time have not all
+     * arrived.
+     */
+    case hydrating
+    /**
+     * Synchronized. Patterns watched later report their own progress
+     * through [`SubscriptionState`].
+     */
+    case ready
+    /**
+     * Open but impaired; [`SyncStatus::error`] says why.
+     */
+    case degraded
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SyncPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSyncPhase: FfiConverterRustBuffer {
+    typealias SwiftType = SyncPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SyncPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .disconnected
+        
+        case 2: return .connecting
+        
+        case 3: return .authenticating
+        
+        case 4: return .replaying
+        
+        case 5: return .hydrating
+        
+        case 6: return .ready
+        
+        case 7: return .degraded
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SyncPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .disconnected:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .connecting:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .authenticating:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .replaying:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .hydrating:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .ready:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .degraded:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncPhase_lift(_ buf: RustBuffer) throws -> SyncPhase {
+    return try FfiConverterTypeSyncPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSyncPhase_lower(_ value: SyncPhase) -> RustBuffer {
+    return FfiConverterTypeSyncPhase.lower(value)
+}
+
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1776,6 +2598,30 @@ fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1856,6 +2702,78 @@ fileprivate struct FfiConverterOptionTypeRefusedWrite: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeSyncStatus: FfiConverterRustBuffer {
+    typealias SwiftType = SyncStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSyncStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSyncStatus.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSubscriptionState: FfiConverterRustBuffer {
+    typealias SwiftType = SubscriptionState?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSubscriptionState.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSubscriptionState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeSyncError: FfiConverterRustBuffer {
+    typealias SwiftType = SyncError?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSyncError.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSyncError.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -1898,6 +2816,31 @@ fileprivate struct FfiConverterSequenceTypeEntry: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSubscriptionChange: FfiConverterRustBuffer {
+    typealias SwiftType = [SubscriptionChange]
+
+    public static func write(_ value: [SubscriptionChange], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSubscriptionChange.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SubscriptionChange] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SubscriptionChange]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSubscriptionChange.read(from: &buf))
         }
         return seq
     }
@@ -1948,6 +2891,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_recached_mobile_checksum_method_recachedclient_connection_opened() != 12186) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_recached_mobile_checksum_method_recachedclient_connection_opening() != 37793) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_recached_mobile_checksum_method_recachedclient_del() != 44727) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1988,6 +2934,21 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recached_mobile_checksum_method_recachedclient_set_sync_token() != 17891) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recached_mobile_checksum_method_recachedclient_subscription_state() != 41445) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recached_mobile_checksum_method_recachedclient_sync_counters() != 22572) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recached_mobile_checksum_method_recachedclient_sync_status() != 57363) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recached_mobile_checksum_method_recachedclient_take_status_change() != 60291) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_recached_mobile_checksum_method_recachedclient_take_subscription_changes() != 35669) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_recached_mobile_checksum_method_recachedclient_ttl() != 4574) {
