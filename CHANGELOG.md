@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.1] (2026-10-25)
 
-Requires recached-mobile from recached 0.5.
+Built on the native core of recached v0.5.0.
 
 - `syncStatus` / `syncStatuses()`: the synchronization lifecycle — `.ready`
   only once the session is authenticated, queued writes are replayed and

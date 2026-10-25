@@ -17,7 +17,7 @@ iOS and macOS.
 Built on `recached-mobile`, the Rust core it shares with the Android SDK,
 through [UniFFI](https://mozilla.github.io/uniffi-rs/).
 
-> **Status: 0.1.0, preview.** Built on the native core of recached v0.4.0. The API may still change before 1.0.
+> **Status: 0.1.1, preview.** Built on the native core of recached v0.5.0. The API may still change before 1.0.
 
 ## Install
 
@@ -26,7 +26,7 @@ In Xcode, **File → Add Package Dependencies…** with
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/recached-sh/recached-swift", from: "0.1.0")
+    .package(url: "https://github.com/recached-sh/recached-swift", from: "0.1.1")
 ],
 targets: [
     .target(name: "App", dependencies: [
@@ -35,7 +35,7 @@ targets: [
 ]
 ```
 
-The native core comes as a prebuilt XCFramework from the recached v0.4.0 release, so building needs no Rust. Supports iOS 15+ and macOS 12+. Linux is a contributor test path using the staged system library.
+The native core comes as a prebuilt XCFramework from the recached v0.5.0 release, so building needs no Rust. Supports iOS 15+ and macOS 12+. Linux is a contributor test path using the staged system library.
 
 ## Use
 
