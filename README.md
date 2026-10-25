@@ -86,11 +86,21 @@ The examples assume your app supplies a backend-minted `token` and a `render` fu
 Show sync state:
 
 ```swift
-cache.connectionState        // .offline, .connecting, .connected, .waiting
+cache.syncStatus             // .disconnected, .connecting, .authenticating, .replaying,
+                             // .hydrating, .ready, .degraded — plus the problem and lastSyncedAt
+cache.syncStatuses()         // AsyncStream of it, starting with the current value
+cache.subscriptionStates     // each watched pattern: .pending, .hydrating, .current, .failed
 cache.pendingWrites          // writes the server has not acknowledged yet
-cache.connectionStates()     // AsyncStream of both, starting with the current value
-cache.pendingWriteCounts()
+cache.connectionState        // the socket alone: .offline, .connecting, .connected, .waiting
 ```
+
+`.ready` means synchronized: the session is authenticated, every queued write
+has been replayed and answered, and every pattern watched when the socket opened
+has its snapshot. `ObservedSyncStatus` (Observation) and `ObservableSyncStatus`
+(`ObservableObject`) put it in SwiftUI. A write past `maxPendingWrites` (10,000
+by default) throws `RecachedError.outboxFull` and changes nothing; a write that
+throws `.storage` changed nothing either. `pendingWriteCounts()` and
+`connectionStates()` stream the other two.
 
 A write the server refuses for good, such as one to a key the sync token makes
 read-only, leaves the queue without reaching the server. Iterate
@@ -99,6 +109,8 @@ read-only, leaves the queue without reaching the server. Iterate
 ```swift
 for await refused in cache.refusedWrites() {
     print("not saved: \(refused.keys): \(refused.reason)")
+    // No watched pattern covers these, so nothing will correct them locally.
+    refused.unreconciled.forEach(rereadOrMarkFailed)
 }
 ```
 
@@ -117,7 +129,7 @@ other's. If you choose a location with `open(at:)`, exclude it yourself.
 
 ## Delivery and storage limits
 
-A connected state means the WebSocket is open, not that authentication, watch hydration, or pending writes have completed. Local write results describe the local operation; the server can later refuse it.
+A connected state means the WebSocket is open, not that authentication, watch hydration, or pending writes have completed — `syncStatus` reports those. Local write results describe the local operation; the server can later refuse it.
 
 - The outbox defaults to 10,000 writes. `maxPendingWrites` changes the cap; overflow drops the oldest queued write while keeping its local effect. The native API has no overflow event.
 - Server duplicate suppression covers retries while the client's mark is retained. AOF recovery after the latest checkpoint can replay a write without its dedup mark; idle marks can also be swept after 24 hours when the map exceeds 10,000 clients. This is not an unconditional exactly-once guarantee.

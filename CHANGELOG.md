@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+Requires recached-mobile from recached 0.5.
+
+- `syncStatus` / `syncStatuses()`: the synchronization lifecycle — `.ready`
+  only once the session is authenticated, queued writes are replayed and
+  answered, and the patterns watched at connect time are hydrated — with the
+  current problem and `lastSyncedAt`. `subscriptionStates` reports each
+  watched pattern. SwiftUI models `ObservedSyncStatus` and
+  `ObservableSyncStatus`.
+- A write past `maxPendingWrites` throws `RecachedError.outboxFull` and
+  changes nothing; until now the oldest queued write was dropped.
+  `RecachedConfig(evictOldestWhenFull: true)` keeps the old behaviour.
+  `RecachedError` gains `.outboxFull` and `.writeIdsExhausted`: an exhaustive
+  `switch` over it needs the new cases.
+- A write that throws `.storage` now changes nothing: the core rolls it back
+  instead of keeping it in memory.
+- `RefusedWrite.unreconciled` names the refused keys no watched pattern covers.
+
 ## [0.1.0] (2026-10-11)
 
 - First release: `Recached.open(at:)` / `open(named:)`, local reads, durable

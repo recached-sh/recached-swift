@@ -26,6 +26,9 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
     private let onRefused: @Sendable (RefusedWrite) -> Void
     /// The pending-write count may have moved.
     private let onAcknowledged: @Sendable () -> Void
+    /// The synchronization status may have moved. Called under `lock` after
+    /// every transport event: it may read the core and must not wait.
+    private let onSyncChanged: @Sendable () -> Void
 
     private let lock = NSLock()
     private var session: URLSession!
@@ -47,7 +50,8 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         onChanged: @escaping @Sendable ([String]) -> Void,
         onUnknownChange: @escaping @Sendable () -> Void,
         onRefused: @escaping @Sendable (RefusedWrite) -> Void,
-        onAcknowledged: @escaping @Sendable () -> Void
+        onAcknowledged: @escaping @Sendable () -> Void,
+        onSyncChanged: @escaping @Sendable () -> Void
     ) {
         self.client = client
         self.url = url
@@ -56,6 +60,7 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         self.onUnknownChange = onUnknownChange
         self.onRefused = onRefused
         self.onAcknowledged = onAcknowledged
+        self.onSyncChanged = onSyncChanged
         super.init()
         // A serial delegate queue: socket callbacks arrive one at a time.
         let queue = OperationQueue()
@@ -73,6 +78,8 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         let socket = session.webSocketTask(with: url)
         task = socket
         state.set(.connecting)
+        client.connectionOpening()
+        onSyncChanged()
         socket.resume()
         receive(on: socket)
     }
@@ -89,6 +96,7 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         task = nil
         _ = client.connectionClosed()  // no reconnect follows, so the backoff is moot
         state.set(.offline)
+        onSyncChanged()
         // The session holds its delegate (this object) until invalidated.
         session.invalidateAndCancel()
     }
@@ -106,6 +114,7 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         // Sends the session and every queued write through the sink.
         client.connectionOpened(sink: Sink(webSocketTask))
         state.set(.connected)
+        onSyncChanged()
         ping = Task { [weak webSocketTask] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.pingInterval)
@@ -158,12 +167,13 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
             return
         }
         let outcome = try? client.frameReceived(frame: frame)
+        onSyncChanged()
         lock.unlock()
 
         if let outcome {
             onChanged(outcome.changedKeys)
             if let refused = outcome.refused {
-                onRefused(RefusedWrite(keys: refused.keys, reason: refused.reason))
+                onRefused(RefusedWrite(keys: refused.keys, reason: refused.reason, unreconciled: refused.unreconciled))
             }
             // Reply matching can no longer be trusted, or the server deferred
             // a write: the reconnect rebuilds the one and replays the other.
@@ -189,6 +199,7 @@ final class Transport: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         ping = nil
         let wait = UInt64(client.connectionClosed())
         state.set(.waiting)
+        onSyncChanged()
         retry = Task { [weak self] in
             try? await Task.sleep(nanoseconds: wait * 1_000_000)
             guard !Task.isCancelled else { return }
