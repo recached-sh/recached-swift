@@ -137,7 +137,8 @@ func core<T>(_ body: () throws -> T) throws -> T {
         case .Storage(let reason): throw RecachedError.storage(reason)
         case .Command(let reason): throw RecachedError.command(reason)
         case .NotUtf8(let key): throw RecachedError.notUTF8(key: key)
-        case .OutboxFull(let pending, let capacity): throw RecachedError.outboxFull(pending: pending, capacity: capacity)
+        case .OutboxFull(let pending, let capacity):
+            throw RecachedError.outboxFull(pending: pending, capacity: capacity)
         case .WriteIdsExhausted: throw RecachedError.writeIdsExhausted
         }
     }
