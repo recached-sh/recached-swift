@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.1.2] (2026-11-11)
+
+Built on the native core of recached v0.5.1. No API changes.
+
+- With `evictOldestWhenFull`, a write that throws `RecachedError.storage` no
+  longer loses the older queued write it evicted to make room; that write
+  stays queued and is sent.
+- With `evictOldestWhenFull`, the late reply to an evicted write that had
+  already been sent no longer appears in `refusedWrites()` or drops the
+  connection.
+- A token passed to `setSyncToken` and accepted by the server now clears an
+  earlier `scopeRefused` problem; `syncStatus` stayed `.degraded` until the
+  next reconnect.
+- `syncStatus` no longer misses a phase change when saving an incoming change
+  fails.
+- The bundled SQLite is 3.54.1, fixing RUSTSEC-2026-0459 / CVE-2026-119375
+  (uninitialized memory returned when a database is opened with a `-wal` of a
+  different page size; local only).
+- `RecachedCore.swift` is regenerated from the v0.5.1 core; only the
+  documentation of `RecachedError.storage` changes.
+- Pair it with a recached 0.5.1 server for the server-side fixes; see the
+  [recached 0.5.1 changelog](https://github.com/recached-sh/recached/blob/main/CHANGELOG.md).
+
 ## [0.1.1] (2026-10-25)
 
 Built on the native core of recached v0.5.0.
