@@ -2028,8 +2028,9 @@ enum RecachedError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError 
     /**
      * The on-device database could not be opened, read or written.
      *
-     * On a write this means the change was applied in memory, and will sync
-     * while the app keeps running, but would not survive a restart.
+     * On a write this means nothing happened: the change was rolled back in
+     * memory, is not on disk, and was not sent. On an incoming frame it
+     * means the frame was applied in memory but not saved.
      */
     case Storage(reason: String
     )
